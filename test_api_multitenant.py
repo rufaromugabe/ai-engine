@@ -107,6 +107,93 @@ def test_document_ingestion(workspace_id):
         print(f"✗ Document ingestion error: {e}")
         return False
 
+def test_multiple_document_ingestion(workspace_id):
+    """Test ingestion of multiple documents with different types and categories"""
+    documents = [
+        {
+            "content": "This is a comprehensive guide to microservices architecture. It covers service decomposition, API gateway patterns, and distributed system design principles. Key concepts include service boundaries, data consistency, and fault tolerance.",
+            "metadata": {
+                "document_type": "technical_manual",
+                "category": "architecture",
+                "author": "tech_team",
+                "title": "Microservices Architecture Guide"
+            }
+        },
+        {
+            "content": "Database optimization strategies for high-performance applications. This document covers indexing strategies, query optimization, connection pooling, and caching mechanisms. Performance monitoring and scaling techniques are also discussed.",
+            "metadata": {
+                "document_type": "technical_manual",
+                "category": "database",
+                "author": "db_team",
+                "title": "Database Performance Guide"
+            }
+        },
+        {
+            "content": "Security best practices for cloud deployment. Topics include identity and access management, network security, encryption at rest and in transit, and compliance frameworks. Zero-trust architecture principles are emphasized.",
+            "metadata": {
+                "document_type": "security_guide",
+                "category": "security",
+                "author": "security_team",
+                "title": "Cloud Security Manual"
+            }
+        },
+        {
+            "content": "DevOps pipeline automation using CI/CD tools. This guide covers automated testing, deployment strategies, infrastructure as code, and monitoring. Container orchestration and blue-green deployments are key topics.",
+            "metadata": {
+                "document_type": "operational_guide",
+                "category": "devops",
+                "author": "devops_team",
+                "title": "CI/CD Pipeline Guide"
+            }
+        },
+        {
+            "content": "API design and documentation standards. RESTful principles, GraphQL implementation, versioning strategies, and OpenAPI specifications. Rate limiting and authentication mechanisms are covered in detail.",
+            "metadata": {
+                "document_type": "technical_manual",
+                "category": "api_design",
+                "author": "api_team",
+                "title": "API Design Standards"
+            }
+        }
+    ]
+    
+    successful_ingestions = 0
+    document_ids = []
+    
+    for i, doc in enumerate(documents):
+        payload = {
+            "content": doc["content"],
+            "organization_id": "test_org_multitenant",
+            "workspace_id": workspace_id,
+            "metadata": doc["metadata"]
+        }
+        
+        try:
+            response = requests.post(f"{BASE_URL}/ingest", json=payload)
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    document_id = result.get('document_id')
+                    document_ids.append(document_id)
+                    successful_ingestions += 1
+                    print(f"✓ Document {i+1} ingested: {doc['metadata']['title']}")
+                else:
+                    print(f"✗ Document {i+1} ingestion failed: {result.get('error')}")
+            else:
+                print(f"✗ Document {i+1} ingestion failed: {response.status_code}")
+        except Exception as e:
+            print(f"✗ Document {i+1} ingestion error: {e}")
+    
+    if successful_ingestions == len(documents):
+        print(f"✓ All {successful_ingestions} documents ingested successfully")
+        return True, document_ids
+    elif successful_ingestions > 0:
+        print(f"⚠ Partial success: {successful_ingestions}/{len(documents)} documents ingested")
+        return True, document_ids
+    else:
+        print("✗ No documents were ingested successfully")
+        return False, []
+
 def test_grouped_search(workspace_id):
     """Test the new grouped search feature"""
     payload = {
@@ -213,14 +300,15 @@ def run_quick_test():
     print("⏳ Waiting for initialization...")
     time.sleep(2)
     
-    # Test 4: Document Ingestion
-    if not test_document_ingestion(workspace_id):
+    # Test 4: Multiple Document Ingestion
+    success, document_ids = test_multiple_document_ingestion(workspace_id)
+    if not success:
         print("\n❌ Document ingestion failed")
         return
     
     # Wait for indexing
     print("⏳ Waiting for document indexing...")
-    time.sleep(3)
+    time.sleep(5)  # Increased wait time for multiple documents
     
     # Test 5: Regular Query
     if not test_regular_query(workspace_id):
@@ -246,6 +334,7 @@ def run_quick_test():
     print("   - Tenant statistics monitoring")
     print("   - Workspace isolation")
     print("   - Enhanced API endpoints")
+    print(f"   - Multiple document types ({len(document_ids)} documents)")
     print("=" * 50)
 
 if __name__ == "__main__":
