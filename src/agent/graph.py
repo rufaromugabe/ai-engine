@@ -22,22 +22,24 @@ try:
     from .enhanced_graph import (
         AgentState,
         WorkspaceAgentConfiguration,
-        route_query,
-        execute_rag_tool,
-        generate_response,
-        should_use_rag,
-        enhanced_graph
+        enhanced_graph,
+        # Import the new functions
+        intelligent_router,
+        execute_tools,
+        reflection_node,
+        generate_response
     )
 except ImportError:
     # Fallback for when relative imports don't work
     from agent.enhanced_graph import (
         AgentState,
         WorkspaceAgentConfiguration,
-        route_query,
-        execute_rag_tool,
-        generate_response,
-        should_use_rag,
-        enhanced_graph
+        enhanced_graph,
+        # Import the new functions
+        intelligent_router,
+        execute_tools,
+        reflection_node,
+        generate_response
     )
 
 logger = logging.getLogger(__name__)
@@ -65,10 +67,13 @@ async def test_query(query: str = "What is LangGraph?") -> Dict[str, Any]:
         "organization_id": config["configurable"]["organization_id"],
         "workspace_id": config["configurable"]["workspace_id"],
         "agent_id": config["configurable"]["agent_id"],
-        "current_tool": None,
+        "current_tool_calls": [],
         "tool_results": [],
         "user_query": query,
-        "context": {}
+        "context": {},
+        "iteration_count": 0,
+        "reflection_history": [],
+        "routing_history": []
     }
     
     try:

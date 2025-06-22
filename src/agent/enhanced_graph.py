@@ -1,15 +1,17 @@
-"""Enhanced agent graph system for multi-workspace support."""
+"""Enhanced agent graph system with intelligent routing and self-correction."""
 
 from __future__ import annotations
 
 import logging
 import json
-from typing import Any, Dict, List, Optional, TypedDict, Annotated
+import time
+from typing import Any, Dict, List, Optional, TypedDict, Annotated, Literal
 from dataclasses import dataclass
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+from langchain_core.pydantic_v1 import BaseModel, Field
 from langgraph.graph import StateGraph, add_messages
 
 from .config import config_manager
@@ -18,16 +20,41 @@ from .workspace_manager import workspace_manager, AgentConfig
 
 logger = logging.getLogger(__name__)
 
+# Enhanced routing models for LLM-based decision making
+class ToolCall(BaseModel):
+    """Represents a tool call decision."""
+    name: str = Field(description="The name of the tool to call")
+    args: dict = Field(description="The arguments to pass to the tool")
+    reasoning: str = Field(description="Why this tool was selected")
+
+class RouterDecision(BaseModel):
+    """Router decision with tool calls and strategy."""
+    tool_calls: List[ToolCall] = Field(description="List of tools to call in sequence")
+    strategy: Literal["single", "sequential", "parallel"] = Field(
+        description="How to execute the tools: single (one tool), sequential (one after another), parallel (simultaneously)"
+    )
+    confidence: float = Field(description="Confidence in this routing decision (0-1)")
+
+class ReflectionResult(BaseModel):
+    """Result of reflection on tool execution."""
+    quality_score: float = Field(description="Quality of the tool results (0-1)")
+    should_retry: bool = Field(description="Whether to retry with different approach")
+    retry_strategy: Optional[str] = Field(description="How to retry if needed")
+    feedback: str = Field(description="Feedback on the results")
+
 class AgentState(TypedDict):
-    """Enhanced state for workspace-aware AI agent."""
+    """Enhanced state for workspace-aware AI agent with reflection."""
     messages: Annotated[List[BaseMessage], add_messages]
     organization_id: str
     workspace_id: Optional[str]
     agent_id: Optional[str]
-    current_tool: Optional[str]
+    current_tool_calls: List[ToolCall]
     tool_results: List[Dict[str, Any]]
     user_query: str
     context: Dict[str, Any]
+    iteration_count: int
+    reflection_history: List[ReflectionResult]
+    routing_history: List[RouterDecision]
 
 @dataclass
 class WorkspaceAgentConfiguration:
@@ -37,14 +64,8 @@ class WorkspaceAgentConfiguration:
     agent_id: Optional[str] = None
     custom_instructions: str = ""
     
-async def route_query(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
-    """Route the user query to determine which tools to use."""
-    # Initialize variables to prevent UnboundLocalError
-    org_id = None
-    workspace_id = None
-    agent_id = None
-    user_query = ""
-    
+async def intelligent_router(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    """LLM-based intelligent router that decides which tools to use."""
     try:
         configuration = config.get("configurable", {})
         org_id = configuration.get("organization_id")
@@ -54,15 +75,11 @@ async def route_query(state: AgentState, config: RunnableConfig) -> Dict[str, An
         agent_id = configuration.get("agent_id")
         
         # Get the latest user message
+        user_query = ""
         for message in reversed(state["messages"]):
             if isinstance(message, HumanMessage):
                 user_query = message.content
                 break
-        
-        # Get agent configuration if specified
-        agent_config = None
-        if workspace_id and agent_id:
-            agent_config = workspace_manager.get_agent(workspace_id, agent_id)
         
         # Initialize tools for organization/workspace
         if workspace_id:
@@ -70,99 +87,278 @@ async def route_query(state: AgentState, config: RunnableConfig) -> Dict[str, An
         else:
             await tool_manager.initialize_tools_for_organization(org_id)
         
-        # Get available tools
+        # Get available tools and their schemas
         available_tools = tool_manager.get_available_tools(org_id, workspace_id)
+        tool_schemas = tool_manager.get_tool_schemas(org_id, workspace_id)
         
-        # Enhanced routing logic - consider agent configuration
-        selected_tool = None
+        # Get agent configuration if specified
+        agent_config = None
+        if workspace_id and agent_id:
+            agent_config = workspace_manager.get_agent(workspace_id, agent_id)
         
-        if agent_config:
-            # Use agent-specific tool selection logic
-            enabled_tool_names = [tool.value for tool in agent_config.enabled_tools]
-            
-            # Simple routing based on query content and agent's enabled tools
-            needs_rag = any(keyword in user_query.lower() for keyword in [
-                "search", "find", "information", "document", "knowledge", 
-                "tell me about", "what is", "explain", "help"
-            ])
-            
-            if needs_rag and "rag" in enabled_tool_names and "rag" in available_tools:
-                selected_tool = "rag"
-            # Add more sophisticated routing logic here for other tools
-        else:
-            # Default routing logic
-            needs_rag = any(keyword in user_query.lower() for keyword in [
-                "search", "find", "information", "document", "knowledge", 
-                "tell me about", "what is", "explain", "help"
-            ])
-            
-            if needs_rag and "rag" in available_tools:
-                selected_tool = "rag"
+        # Get LLM configuration for routing
+        llm_config = config_manager.get_llm_config(org_id, workspace_id)
+        llm = ChatOpenAI(
+            model=llm_config.model,
+            temperature=0.1,  # Low temperature for consistent routing decisions
+            api_key=llm_config.api_key
+        )
+        structured_llm = llm.with_structured_output(RouterDecision)
+        
+        # Build context for routing decision
+        routing_context = ""
+        if state.get("reflection_history"):
+            recent_reflections = state["reflection_history"][-3:]  # Last 3 reflections
+            routing_context += "\n\nPrevious attempt feedback:\n"
+            for i, reflection in enumerate(recent_reflections):
+                routing_context += f"{i+1}. Quality: {reflection.quality_score:.2f}, Feedback: {reflection.feedback}\n"
+        
+        if state.get("routing_history"):
+            routing_context += f"\n\nPrevious routing attempts: {len(state['routing_history'])}"
+        
+        # Create system prompt for intelligent routing
+        system_prompt = f"""You are an intelligent tool router for an AI assistant. Analyze the user's query and decide which tools to use.
+
+Available tools and their capabilities:
+{json.dumps(tool_schemas, indent=2)}
+
+User Query: {user_query}
+
+Current iteration: {state.get('iteration_count', 0)}
+{routing_context}
+
+Instructions:
+1. Analyze the user's intent and information needs
+2. Select the most appropriate tool(s) to fulfill the request
+3. Consider the previous feedback if this is a retry
+4. Provide clear reasoning for your tool selection
+5. Set confidence based on how well the tools match the query
+
+For typical queries:
+- Knowledge/information requests → RAG tool
+- Multiple related questions → Sequential tool calls
+- Complex analysis → Consider multiple tools
+
+Be strategic: if previous attempts failed, try a different approach or tool combination."""
+
+        # Get routing decision from LLM
+        router_result = await structured_llm.ainvoke([
+            SystemMessage(content=system_prompt)
+        ])
+        
+        # Filter tool calls to only include available tools
+        valid_tool_calls = []
+        for tool_call in router_result.tool_calls:
+            if tool_call.name in available_tools:
+                valid_tool_calls.append(tool_call)
+            else:
+                logger.warning(f"Router selected unavailable tool: {tool_call.name}")
+        
+        # If no valid tools, default to available ones
+        if not valid_tool_calls and "rag" in available_tools:
+            valid_tool_calls = [ToolCall(
+                name="rag",
+                args={"query": user_query},
+                reasoning="Default to RAG for information retrieval"
+            )]
+        
+        # Update routing history
+        routing_history = state.get("routing_history", [])
+        routing_history.append(RouterDecision(
+            tool_calls=valid_tool_calls,
+            strategy=router_result.strategy,
+            confidence=router_result.confidence
+        ))
         
         return {
             "organization_id": org_id,
             "workspace_id": workspace_id,
             "agent_id": agent_id,
-            "current_tool": selected_tool,
+            "current_tool_calls": valid_tool_calls,
             "user_query": user_query,
+            "routing_history": routing_history,
             "context": {
                 "available_tools": available_tools,
-                "routing_decision": selected_tool,
+                "routing_decision": router_result.dict(),
                 "agent_config": agent_config.__dict__ if agent_config else None
             }
         }
         
     except Exception as e:
-        logger.error(f"Error in route_query: {str(e)}")
+        logger.error(f"Error in intelligent_router: {str(e)}")
         return {
             "organization_id": org_id or "unknown",
             "workspace_id": workspace_id,
             "agent_id": agent_id,
-            "current_tool": None,
+            "current_tool_calls": [],
             "user_query": user_query,
             "context": {"error": str(e)}
         }
 
-async def execute_rag_tool(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
-    """Execute the RAG tool with workspace context."""
+async def execute_tools(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    """Execute the selected tools based on the routing decision."""
     try:
         org_id = state["organization_id"]
         workspace_id = state.get("workspace_id")
         user_query = state["user_query"]
+        tool_calls = state.get("current_tool_calls", [])
         
-        # Execute RAG tool with workspace context
-        execution_result = await tool_manager.execute_tool(
-            organization_id=org_id,
-            tool_name="rag",
-            workspace_id=workspace_id,
-            query=user_query
-        )
+        if not tool_calls:
+            return {
+                "messages": [AIMessage(content="No tools were selected for execution.")],
+                "tool_results": []
+            }
         
-        # Format results for the LLM
-        if execution_result.success and execution_result.result.data:
-            rag_results = execution_result.result.data["results"]
-            context_text = "\n\n".join([
-                f"[Score: {result['score']:.3f}] {result['content']}" 
-                for result in rag_results[:3]  # Top 3 results
-            ])
+        messages = []
+        tool_results = []
+        
+        # Execute tools based on strategy (for now, execute sequentially)
+        for tool_call in tool_calls:
+            start_time = time.time()
             
-            tool_message = f"Retrieved relevant information:\n{context_text}"
-        else:
-            tool_message = f"RAG search failed: {execution_result.result.error or 'Unknown error'}"
-        
-        # Add tool result to messages
-        messages = [AIMessage(content=tool_message)]
+            try:
+                # Execute the tool
+                execution_result = await tool_manager.execute_tool(
+                    organization_id=org_id,
+                    tool_name=tool_call.name,
+                    workspace_id=workspace_id,
+                    **tool_call.args
+                )
+                
+                execution_time = time.time() - start_time
+                
+                # Format results for the LLM
+                if execution_result.success and execution_result.result.data:
+                    if tool_call.name == "rag":
+                        rag_results = execution_result.result.data.get("results", [])
+                        if rag_results:
+                            context_text = "\n\n".join([
+                                f"[Relevance: {result.get('score', 0):.3f}] {result.get('content', '')}" 
+                                for result in rag_results[:5]  # Top 5 results
+                            ])
+                            tool_message = f"Retrieved relevant information using {tool_call.reasoning}:\n{context_text}"
+                        else:
+                            tool_message = f"No relevant information found for the query: '{user_query}'"
+                    else:
+                        # Generic tool result formatting
+                        tool_message = f"Tool {tool_call.name} executed successfully: {execution_result.result.data}"
+                else:
+                    tool_message = f"Tool {tool_call.name} execution failed: {execution_result.result.error or 'Unknown error'}"
+                
+                messages.append(AIMessage(content=tool_message))
+                tool_results.append({
+                    "tool_name": tool_call.name,
+                    "success": execution_result.success,
+                    "execution_time": execution_time,
+                    "reasoning": tool_call.reasoning,
+                    "result": execution_result.result.__dict__
+                })
+                
+            except Exception as e:
+                logger.error(f"Error executing tool {tool_call.name}: {str(e)}")
+                messages.append(AIMessage(content=f"Error executing tool {tool_call.name}: {str(e)}"))
+                tool_results.append({
+                    "tool_name": tool_call.name,
+                    "success": False,
+                    "error": str(e),
+                    "reasoning": tool_call.reasoning
+                })
         
         return {
             "messages": messages,
-            "tool_results": [execution_result.result.__dict__]
+            "tool_results": tool_results
         }
         
     except Exception as e:
-        logger.error(f"Error executing RAG tool: {str(e)}")
+        logger.error(f"Error executing tools: {str(e)}")
         return {
-            "messages": [AIMessage(content=f"Error executing RAG tool: {str(e)}")],
+            "messages": [AIMessage(content=f"Error executing tools: {str(e)}")],
             "tool_results": []
+        }
+
+async def reflection_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    """Reflect on tool execution results and decide if retry is needed."""
+    try:
+        configuration = config.get("configurable", {})
+        org_id = state["organization_id"]
+        workspace_id = state.get("workspace_id")
+        tool_results = state.get("tool_results", [])
+        user_query = state["user_query"]
+        iteration_count = state.get("iteration_count", 0)
+        
+        # Get LLM for reflection
+        llm_config = config_manager.get_llm_config(org_id, workspace_id)
+        llm = ChatOpenAI(
+            model=llm_config.model,
+            temperature=0.2,
+            api_key=llm_config.api_key
+        )
+        structured_llm = llm.with_structured_output(ReflectionResult)
+        
+        # Analyze tool results
+        results_summary = ""
+        successful_tools = 0
+        total_tools = len(tool_results)
+        
+        for result in tool_results:
+            if result.get("success"):
+                successful_tools += 1
+                results_summary += f"✓ {result.get('tool_name')}: Success\n"
+            else:
+                results_summary += f"✗ {result.get('tool_name')}: Failed - {result.get('error', 'Unknown error')}\n"
+        
+        # Create reflection prompt
+        reflection_prompt = f"""Analyze the quality and relevance of these tool execution results for the user's query.
+
+User Query: {user_query}
+Iteration: {iteration_count + 1}
+Successful Tools: {successful_tools}/{total_tools}
+
+Tool Results Summary:
+{results_summary}
+
+Detailed Results:
+{json.dumps(tool_results, indent=2)}
+
+Evaluate:
+1. Quality of results (0-1 score)
+2. Whether the results adequately address the user's query
+3. If a retry with different approach would be beneficial
+4. Specific feedback for improvement
+
+Consider:
+- Did we get relevant information?
+- Are there gaps in the response?
+- Would different tools or search terms help?
+- Have we tried this approach before?
+
+Max iterations allowed: 3 (current: {iteration_count + 1})"""
+
+        # Get reflection decision
+        reflection_result = await structured_llm.ainvoke([
+            SystemMessage(content=reflection_prompt)
+        ])
+        
+        # Update reflection history
+        reflection_history = state.get("reflection_history", [])
+        reflection_history.append(reflection_result)
+        
+        return {
+            "reflection_history": reflection_history,
+            "iteration_count": iteration_count + 1
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in reflection_node: {str(e)}")
+        # Default to not retry on reflection error
+        return {
+            "reflection_history": state.get("reflection_history", []) + [
+                ReflectionResult(
+                    quality_score=0.5,
+                    should_retry=False,
+                    feedback=f"Reflection error: {str(e)}"
+                )            ],
+            "iteration_count": state.get("iteration_count", 0) + 1
         }
 
 async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
@@ -194,8 +390,8 @@ async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[s
             api_key=llm_config.api_key
         )
         
-        # Build system prompt
-        system_prompt = f"""You are an AI assistant for organization {org_id}."""
+        # Build enhanced system prompt with reflection context
+        system_prompt = f"""You are an intelligent AI assistant for organization {org_id}."""
         
         if workspace_id:
             system_prompt += f"\nWorkspace: {workspace_id}"
@@ -211,20 +407,46 @@ async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[s
             if agent_config.custom_instructions:
                 system_prompt += f"\n\nCustom Instructions: {agent_config.custom_instructions}"
         
-        # Add general instructions
+        # Add context from tool execution and reflection
+        tool_results = state.get("tool_results", [])
+        reflection_history = state.get("reflection_history", [])
+        iteration_count = state.get("iteration_count", 0)
+        
         system_prompt += f"""
 
-You have access to various tools and a knowledge base through RAG (Retrieval-Augmented Generation).
+You are an advanced AI assistant with access to various tools and knowledge bases.
+
+Current Context:
+- Iteration: {iteration_count}
+- Tools executed: {len(tool_results)}
+- Available tools: {tool_manager.get_available_tools(org_id, workspace_id)}
 
 When responding:
-1. Use the retrieved information to provide accurate, contextual answers
-2. If no relevant information was found, be honest about it
-3. Be helpful, concise, and professional
-4. Cite information when appropriate
+1. Synthesize information from all tool results
+2. Be transparent about the quality and limitations of available information
+3. If multiple attempts were made, acknowledge the iteration process
+4. Provide helpful, accurate, and contextual responses
+5. Cite sources when appropriate
 
-Available tools: {tool_manager.get_available_tools(org_id, workspace_id)}
+Quality Guidelines:
+- If tool results are limited, explain why and suggest alternatives
+- If this is a retry iteration, build upon previous attempts
+- Be honest about gaps in knowledge or failed tool executions
+- Prioritize user satisfaction while maintaining accuracy
 """
-        
+
+        # Add reflection context if available
+        if reflection_history:
+            latest_reflection = reflection_history[-1]
+            system_prompt += f"""
+
+Latest Reflection Analysis:
+- Quality Score: {latest_reflection.quality_score:.2f}
+- Feedback: {latest_reflection.feedback}
+
+Use this reflection to improve your response quality.
+"""
+
         # Add custom instructions from configuration if available
         custom_instructions = configuration.get("custom_instructions", "")
         if custom_instructions:
@@ -248,33 +470,71 @@ Available tools: {tool_manager.get_available_tools(org_id, workspace_id)}
             "messages": [error_message]
         }
 
-def should_use_rag(state: AgentState) -> str:
-    """Determine if we should use RAG tool."""
-    current_tool = state.get("current_tool")
-    if current_tool == "rag":
-        return "rag_tool"
+def should_execute_tools(state: AgentState) -> str:
+    """Determine if we should execute tools."""
+    current_tool_calls = state.get("current_tool_calls", [])
+    if current_tool_calls:
+        return "execute_tools"
     else:
         return "generate_response"
 
-# Create the enhanced graph
+def should_retry_or_respond(state: AgentState) -> str:
+    """Decide whether to retry with different approach or generate final response."""
+    reflection_history = state.get("reflection_history", [])
+    iteration_count = state.get("iteration_count", 0)
+    
+    # Check if we should retry
+    if reflection_history:
+        latest_reflection = reflection_history[-1]
+        
+        # Retry conditions:
+        # 1. Latest reflection suggests retry
+        # 2. We haven't exceeded max iterations (3)
+        # 3. Quality score is below threshold (0.6)
+        if (latest_reflection.should_retry and 
+            iteration_count < 3 and 
+            latest_reflection.quality_score < 0.6):
+            return "intelligent_router"  # Go back to routing for different approach
+    
+    # Otherwise, generate final response
+    return "generate_response"
+
+# Create the enhanced graph with intelligent routing and self-correction
 workflow = StateGraph(AgentState, config_schema=WorkspaceAgentConfiguration)
 
 # Add nodes
-workflow.add_node("route_query", route_query)
-workflow.add_node("rag_tool", execute_rag_tool)
+workflow.add_node("intelligent_router", intelligent_router)
+workflow.add_node("execute_tools", execute_tools)
+workflow.add_node("reflection_node", reflection_node)
 workflow.add_node("generate_response", generate_response)
 
 # Add edges
-workflow.add_edge("__start__", "route_query")
+workflow.add_edge("__start__", "intelligent_router")
+
+# Conditional edges from router
 workflow.add_conditional_edges(
-    "route_query",
-    should_use_rag,
+    "intelligent_router",
+    should_execute_tools,
     {
-        "rag_tool": "rag_tool",
+        "execute_tools": "execute_tools",
         "generate_response": "generate_response"
     }
 )
-workflow.add_edge("rag_tool", "generate_response")
+
+# After tool execution, always reflect
+workflow.add_edge("execute_tools", "reflection_node")
+
+# Conditional edges from reflection - retry or respond
+workflow.add_conditional_edges(
+    "reflection_node",
+    should_retry_or_respond,
+    {
+        "intelligent_router": "intelligent_router",  # Retry with different approach
+        "generate_response": "generate_response"     # Generate final response
+    }
+)
+
+# End after generating response
 workflow.add_edge("generate_response", "__end__")
 
 # Compile the enhanced graph
@@ -317,17 +577,19 @@ async def execute_agent_query(
         
         if config_overrides:
             config["configurable"].update(config_overrides)
-        
-        # Prepare initial state
+          # Prepare initial state with enhanced structure
         initial_state = {
             "messages": [HumanMessage(content=query)],
             "organization_id": organization_id,
             "workspace_id": workspace_id,
             "agent_id": agent_id,
-            "current_tool": None,
+            "current_tool_calls": [],
             "tool_results": [],
             "user_query": query,
-            "context": {}
+            "context": {},
+            "iteration_count": 0,
+            "reflection_history": [],
+            "routing_history": []
         }
         
         # Execute the graph
