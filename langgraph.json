@@ -1,0 +1,21 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./src/agent/graph.py:graph"
+  },
+  "env": ".env",
+  "dockerfile": "Dockerfile",
+  "python_version": "3.11",
+  "pip_config_file": "pyproject.toml",
+  "studio": {
+    "host": "0.0.0.0",
+    "port": 8123
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8000
+  },
+  "env_vars": {
+    "BG_JOB_ISOLATED_LOOPS": "true"
+  }
+}
