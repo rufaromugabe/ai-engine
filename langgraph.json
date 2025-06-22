@@ -9,13 +9,23 @@
   "pip_config_file": "pyproject.toml",
   "studio": {
     "host": "0.0.0.0",
-    "port": 8123
+    "port": 8123,
+    "config": {
+      "configurable": {
+        "organization_id": "dev-org",
+        "workspace_id": "dev-workspace",
+        "agent_id": "dev-agent"
+      }
+    }
   },
   "api": {
     "host": "0.0.0.0",
     "port": 8000
   },
   "env_vars": {
-    "BG_JOB_ISOLATED_LOOPS": "true"
+    "BG_JOB_ISOLATED_LOOPS": "true",
+    "DEFAULT_ORG_ID": "dev-org",
+    "DEFAULT_WORKSPACE_ID": "dev-workspace",
+    "DEFAULT_AGENT_ID": "dev-agent"
   }
 }

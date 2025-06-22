@@ -5,18 +5,32 @@ from __future__ import annotations
 import logging
 import json
 import time
+import os
 from typing import Any, Dict, List, Optional, TypedDict, Annotated, Literal
 from dataclasses import dataclass
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, add_messages
 
-from .config import config_manager
-from .tool_manager import tool_manager
-from .workspace_manager import workspace_manager, AgentConfig
+# Handle both relative and absolute imports
+try:
+    from .config import config_manager
+    from .tool_manager import tool_manager
+    from .workspace_manager import workspace_manager, AgentConfig
+except ImportError:
+    # Fallback for when relative imports don't work
+    import sys
+    from pathlib import Path
+    current_dir = Path(__file__).parent
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+    
+    from config import config_manager
+    from tool_manager import tool_manager
+    from workspace_manager import workspace_manager, AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +87,22 @@ async def intelligent_router(state: AgentState, config: RunnableConfig) -> Dict[
     user_query = ""
     
     try:
-        configuration = config.get("configurable", {})
-        org_id = configuration.get("organization_id")
+        # Get configuration with safe fallbacks
+        configuration = config.get("configurable", {}) if config else {}
+        
+        # Use environment variables as fallbacks if config not provided
+        org_id = configuration.get("organization_id") or os.getenv("DEFAULT_ORG_ID", "dev-org")
+        workspace_id = configuration.get("workspace_id") or os.getenv("DEFAULT_WORKSPACE_ID", "dev-workspace")
+        agent_id = configuration.get("agent_id") or os.getenv("DEFAULT_AGENT_ID", "dev-agent")
+        
         if not org_id:
             raise ValueError("organization_id is required")
-        workspace_id = configuration.get("workspace_id")
-        agent_id = configuration.get("agent_id")
+        
+        # Ensure the development organization exists
+        if org_id in ["dev-org", os.getenv("DEFAULT_ORG_ID", "dev-org")]:
+            await ensure_dev_organization_exists()
+        
+        logger.info(f"Router using org_id: {org_id}, workspace_id: {workspace_id}, agent_id: {agent_id}")
         
         # Get the latest user message
         user_query = ""
@@ -284,9 +308,10 @@ async def execute_tools(state: AgentState, config: RunnableConfig) -> Dict[str, 
 async def reflection_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Reflect on tool execution results and decide if retry is needed."""
     try:
-        configuration = config.get("configurable", {})
-        org_id = state["organization_id"]
-        workspace_id = state.get("workspace_id")
+        # Get configuration with safe fallbacks
+        configuration = config.get("configurable", {}) if config else {}
+        org_id = state["organization_id"] or os.getenv("DEFAULT_ORG_ID", "dev-org")
+        workspace_id = state.get("workspace_id") or os.getenv("DEFAULT_WORKSPACE_ID", "dev-workspace")
         tool_results = state.get("tool_results", [])
         user_query = state["user_query"]
         iteration_count = state.get("iteration_count", 0)
@@ -369,10 +394,11 @@ Max iterations allowed: 3 (current: {iteration_count + 1})"""
 async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """Generate the final response using the LLM with agent-specific configuration."""
     try:
-        configuration = config.get("configurable", {})
-        org_id = state["organization_id"]
-        workspace_id = state.get("workspace_id")
-        agent_id = state.get("agent_id")
+        # Get configuration with safe fallbacks
+        configuration = config.get("configurable", {}) if config else {}
+        org_id = state["organization_id"] or os.getenv("DEFAULT_ORG_ID", "dev-org")
+        workspace_id = state.get("workspace_id") or os.getenv("DEFAULT_WORKSPACE_ID", "dev-workspace")
+        agent_id = state.get("agent_id") or os.getenv("DEFAULT_AGENT_ID", "dev-agent")
         
         # Get agent configuration
         agent_config = None
@@ -671,3 +697,36 @@ async def get_organization_knowledge_base_info(
         "data": result.data,
         "error": result.error
     }
+
+async def ensure_dev_organization_exists():
+    """Ensure the development organization exists for LangGraph Studio."""
+    dev_org_id = os.getenv("DEFAULT_ORG_ID", "dev-org")
+    
+    try:
+        # Try to get the organization config
+        config_manager.get_organization_config(dev_org_id)
+        logger.info(f"Development organization '{dev_org_id}' already exists")
+    except ValueError:
+        # Organization doesn't exist, create it
+        logger.info(f"Creating development organization '{dev_org_id}'")
+        
+        # Handle both relative and absolute imports
+        try:
+            from .config import OrganizationConfig, ToolType
+        except ImportError:
+            from config import OrganizationConfig, ToolType
+        
+        org_config = OrganizationConfig(
+            organization_id=dev_org_id,
+            enabled_tools=[ToolType.RAG]  # Enable RAG tool by default
+        )
+        
+        # Register the organization
+        config_manager.register_organization(org_config)
+        
+        # Initialize tools for the organization
+        await tool_manager.initialize_tools_for_organization(dev_org_id)
+        
+        logger.info(f"Development organization '{dev_org_id}' created successfully")
+    
+    return dev_org_id
