@@ -253,24 +253,29 @@ def example_multitenant_rag_features(workspace_id):
             print(f"    - {group_name}: {len(items)} items")
     else:
         print(f"  ✗ Grouped search failed: {response.status_code}")
-    
-    # Example 2: Tenant Statistics
+      # Example 2: Tenant Statistics
     print("\n8b. Getting tenant statistics...")
     stats_payload = {
         "organization_id": "acme_corp",
         "workspace_id": workspace_id
     }
     
-    response = requests.post(f"{BASE_URL}/rag/tenant-stats", json=stats_payload)
-    if response.status_code == 200:
-        stats = response.json()
-        print(f"  ✓ Tenant statistics:")
-        print(f"    - Documents: {stats['total_documents']}")
-        print(f"    - Chunks: {stats['total_chunks']}")
-        print(f"    - Avg chunks/doc: {stats['avg_chunks_per_document']}")
-        print(f"    - Collection: {stats['collection_name']}")
-    else:
-        print(f"  ✗ Getting statistics failed: {response.status_code}")
+    try:
+        response = requests.post(f"{BASE_URL}/rag/tenant-stats", json=stats_payload, timeout=35)
+        if response.status_code == 200:
+            stats = response.json()
+            print(f"  ✓ Tenant statistics:")
+            print(f"    - Documents: {stats['total_documents']}")
+            print(f"    - Chunks: {stats['total_chunks']}")
+            print(f"    - Avg chunks/doc: {stats['avg_chunks_per_document']}")
+            print(f"    - Collection: {stats['collection_name']}")
+        else:
+            print(f"  ✗ Getting statistics failed: {response.status_code}")
+            print(f"    Response: {response.text[:200]}...")
+    except requests.exceptions.Timeout:
+        print("  ⚠ Statistics request timed out - this is normal for large datasets")
+    except Exception as e:
+        print(f"  ✗ Statistics error: {e}")
     
     # Example 3: Advanced Search with Filters
     print("\n8c. Advanced search with filters...")

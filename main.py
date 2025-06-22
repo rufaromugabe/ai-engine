@@ -339,14 +339,10 @@ async def get_knowledge_base_info(organization_id: str, workspace_id: Optional[s
             error=str(e)
         )
 
-@app.get("/api/v1/health")
+@app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "initialized_organizations": list(initialized_orgs),
-        "available_tools": ["rag"]
-    }
+    """Simple health check endpoint."""
+    return {"status": "healthy", "service": "multitenant-rag-api"}
 
 @app.get("/api/v1/organizations")
 async def list_organizations():
@@ -395,10 +391,11 @@ async def create_workspace(request: CreateWorkspaceRequest):
         # Initialize workspace tools
         await workspace_manager.initialize_workspace_tools(workspace.workspace_id)
         
-        return WorkspaceResponse(
+
+         return WorkspaceResponse(
             success=True,
             workspace_id=workspace.workspace_id
-        )
+         )
         
     except Exception as e:
         logger.error(f"Error creating workspace: {str(e)}")
@@ -728,9 +725,25 @@ async def get_tenant_statistics(request: TenantStatsRequest):
         rag_tool = tool_manager.get_tool_instance(org_id, "rag", workspace_id)
         if not rag_tool:
             raise HTTPException(status_code=500, detail="RAG tool not available")
-        
-        # Get tenant statistics
-        result = await rag_tool.get_tenant_statistics()
+          # Get tenant statistics with timeout
+        try:
+            import asyncio
+            result = await asyncio.wait_for(
+                rag_tool.get_tenant_statistics(),
+                timeout=30.0  # 30 second timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Tenant statistics timeout for org '{org_id}', workspace '{workspace_id}'")
+            return TenantStatsResponse(
+                success=False,
+                organization_id=org_id,
+                workspace_id=workspace_id or "org_default",
+                total_documents=0,
+                total_chunks=0,
+                collection_name="",
+                avg_chunks_per_document=0.0,
+                error="Statistics collection timeout - try again later"
+            )
         
         if result.success:
             data = result.data

@@ -646,7 +646,7 @@ class RAGTool(BaseTool):
 
         except Exception as e:
             logger.error(f"Grouped RAG retrieval error: {str(e)}")
-            return ToolResult(
+            return ToolResult(                
                 success=False,
                 data=None,
                 error=f"Grouped RAG retrieval failed: {str(e)}"
@@ -662,7 +662,12 @@ class RAGTool(BaseTool):
             )
 
         try:
-            # Get tenant-specific point count
+            # Use a more efficient approach - count with a single scroll request
+            document_ids = set()
+            total_chunks = 0
+            max_points_to_scan = 1000  # Limit to prevent infinite loops
+            
+            # Get tenant-specific points with a reasonable limit
             scroll_result = self.qdrant_client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=Filter(
@@ -677,51 +682,21 @@ class RAGTool(BaseTool):
                         )
                     ]
                 ),
-                limit=1,
+                limit=max_points_to_scan,
                 with_payload=True,
                 with_vectors=False
             )
 
-            # Count documents and get document IDs
-            document_ids = set()
-            total_chunks = 0
-            
-            # Get more detailed statistics by scrolling through all points
-            next_page_offset = None
-            while True:
-                scroll_params = {
-                    "collection_name": self.collection_name,
-                    "scroll_filter": Filter(
-                        must=[
-                            FieldCondition(
-                                key="organization_id",
-                                match=MatchValue(value=self.organization_id)
-                            ),
-                            FieldCondition(
-                                key="workspace_id",
-                                match=MatchValue(value=self.workspace_id or "org_default")
-                            )
-                        ]
-                    ),
-                    "limit": 100,
-                    "with_payload": True,
-                    "with_vectors": False
-                }
-                
-                if next_page_offset:
-                    scroll_params["offset"] = next_page_offset
-                
-                batch_result = self.qdrant_client.scroll(**scroll_params)
-                points, next_page_offset = batch_result
-                
-                if not points:
-                    break
-                    
-                for point in points:
-                    total_chunks += 1
-                    if point.payload and "document_id" in point.payload:
-                        document_ids.add(point.payload["document_id"])
+            # Process the results
+            points, next_page_offset = scroll_result
+            for point in points:
+                total_chunks += 1
+                if point.payload and "document_id" in point.payload:
+                    document_ids.add(point.payload["document_id"])
 
+            # If there are more points, we'll indicate this in the response
+            has_more = next_page_offset is not None
+            
             return ToolResult(
                 success=True,
                 data={
@@ -730,7 +705,9 @@ class RAGTool(BaseTool):
                     "total_documents": len(document_ids),
                     "total_chunks": total_chunks,
                     "collection_name": self.collection_name,
-                    "avg_chunks_per_document": round(total_chunks / len(document_ids), 2) if document_ids else 0
+                    "avg_chunks_per_document": round(total_chunks / len(document_ids), 2) if document_ids else 0,
+                    "scanned_limit": max_points_to_scan,
+                    "has_more_data": has_more
                 },
                 metadata={
                     "operation": "tenant_statistics",
