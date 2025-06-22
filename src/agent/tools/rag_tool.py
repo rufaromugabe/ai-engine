@@ -147,6 +147,10 @@ class RAGTool(BaseTool):
 
             must_conditions = [
                 FieldCondition(
+                    key="organization_id",
+                    match=MatchValue(value=self.organization_id)
+                ),
+                FieldCondition(
                     key="workspace_id",
                     match=MatchValue(value=self.workspace_id or "org_default")
                 )
@@ -274,6 +278,10 @@ class RAGTool(BaseTool):
                         FieldCondition(
                             key="document_id",
                             match=MatchValue(value=document_id)
+                        ),
+                        FieldCondition(
+                            key="organization_id",
+                            match=MatchValue(value=self.organization_id)
                         ),
                         FieldCondition(
                             key="workspace_id",
