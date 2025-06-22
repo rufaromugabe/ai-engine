@@ -66,6 +66,12 @@ class WorkspaceAgentConfiguration:
     
 async def intelligent_router(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """LLM-based intelligent router that decides which tools to use."""
+    # Initialize variables to prevent UnboundLocalError
+    org_id = None
+    workspace_id = None
+    agent_id = None
+    user_query = ""
+    
     try:
         configuration = config.get("configurable", {})
         org_id = configuration.get("organization_id")
@@ -183,8 +189,7 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
                 "agent_config": agent_config.__dict__ if agent_config else None
             }
         }
-        
-    except Exception as e:
+          except Exception as e:
         logger.error(f"Error in intelligent_router: {str(e)}")
         return {
             "organization_id": org_id or "unknown",
