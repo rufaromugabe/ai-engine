@@ -25,7 +25,7 @@ class DistanceMetric(str, Enum):
 @dataclass
 class RAGConfig:
     """Configuration for RAG tool."""
-    collection_name: str = field(default_factory=lambda: os.getenv("RAG_COLLECTION_NAME", "default_collection"))
+    collection_name: str = field(default_factory=lambda: os.getenv("RAG_COLLECTION_NAME", "ai_engine_knowledge_base"))
     vector_size: int = field(default_factory=lambda: int(os.getenv("RAG_VECTOR_SIZE", "1536")))
     distance_metric: DistanceMetric = field(default_factory=lambda: DistanceMetric(os.getenv("RAG_DISTANCE_METRIC", "Cosine")))
     top_k: int = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
