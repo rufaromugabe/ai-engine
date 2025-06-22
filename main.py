@@ -390,9 +390,8 @@ async def create_workspace(request: CreateWorkspaceRequest):
         
         # Initialize workspace tools
         await workspace_manager.initialize_workspace_tools(workspace.workspace_id)
-        
 
-         return WorkspaceResponse(
+        return WorkspaceResponse(
             success=True,
             workspace_id=workspace.workspace_id
          )
