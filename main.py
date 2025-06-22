@@ -100,6 +100,69 @@ class KnowledgeBaseInfo(BaseModel):
     organization_documents: Optional[int] = None
     error: Optional[str] = None
 
+# New Pydantic models for multitenant features
+class GroupedSearchRequest(BaseModel):
+    query: str
+    organization_id: str
+    workspace_id: Optional[str] = None
+    group_by: str
+    limit: int = 5
+    group_size: int = 5
+    filter_conditions: Optional[Dict[str, Any]] = None
+
+class GroupedSearchResponse(BaseModel):
+    success: bool
+    query: str
+    groups: Dict[str, List[Dict[str, Any]]]
+    total_groups: int
+    group_by: str
+    organization_id: str
+    workspace_id: Optional[str] = None
+    error: Optional[str] = None
+
+class TenantStatsRequest(BaseModel):
+    organization_id: str
+    workspace_id: Optional[str] = None
+
+class TenantStatsResponse(BaseModel):
+    success: bool
+    organization_id: str
+    workspace_id: str
+    total_documents: int
+    total_chunks: int
+    collection_name: str
+    avg_chunks_per_document: float
+    error: Optional[str] = None
+
+class BulkDeleteRequest(BaseModel):
+    organization_id: str
+    workspace_id: Optional[str] = None
+    confirm_organization_id: str
+
+class BulkDeleteResponse(BaseModel):
+    success: bool
+    organization_id: str
+    workspace_id: str
+    deleted_documents: int
+    deleted_chunks: int
+    collection_name: str
+    error: Optional[str] = None
+
+class MigrationRequest(BaseModel):
+    organization_id: str
+    source_workspace_id: Optional[str] = None
+    target_workspace_id: str
+    document_filter: Optional[Dict[str, Any]] = None
+
+class MigrationResponse(BaseModel):
+    success: bool
+    source_organization_id: str
+    source_workspace_id: str
+    target_workspace_id: str
+    migrated_chunks: int
+    collection_name: str
+    error: Optional[str] = None
+
 # Global state to track initialized organizations
 initialized_orgs = set()
 
@@ -536,26 +599,12 @@ async def update_agent(workspace_id: str, agent_id: str, request: UpdateAgentReq
             updates["system_prompt"] = request.system_prompt
         if request.model_settings is not None:
             updates["model_settings"] = request.model_settings
-        if request.tool_configurations is not None:
-            updates["tool_configurations"] = request.tool_configurations
-        if request.is_active is not None:
-            updates["is_active"] = request.is_active
         
-        # Convert enabled_tools if provided
-        if request.enabled_tools is not None:
-            enabled_tools = []
-            for tool_name in request.enabled_tools:
-                try:
-                    enabled_tools.append(ToolType(tool_name))
-                except ValueError:
-                    logger.warning(f"Unknown tool type: {tool_name}")
-            updates["enabled_tools"] = enabled_tools
+        # Update the agent
+        updated_agent = workspace_manager.update_agent(workspace_id, agent_id, updates)
         
-        # Update agent
-        success = workspace_manager.update_agent(workspace_id, agent_id, updates)
-        
-        if success:
-            return {"success": True, "message": "Agent updated successfully"}
+        if updated_agent:
+            return AgentResponse(success=True, agent_id=agent_id, message="Agent updated successfully")
         else:
             raise HTTPException(status_code=404, detail="Agent not found")
             
@@ -563,7 +612,7 @@ async def update_agent(workspace_id: str, agent_id: str, request: UpdateAgentReq
         raise
     except Exception as e:
         logger.error(f"Error updating agent: {str(e)}")
-        return {"success": False, "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/v1/workspaces/{workspace_id}/agents/{agent_id}")
 async def delete_agent(workspace_id: str, agent_id: str):
@@ -594,6 +643,250 @@ async def get_workspace_stats(workspace_id: str):
     except Exception as e:
         logger.error(f"Error getting workspace stats: {str(e)}")
         return {"success": False, "error": str(e)}
+
+# Multitenant RAG Endpoints
+@app.post("/api/v1/rag/grouped-search", response_model=GroupedSearchResponse)
+async def grouped_search(request: GroupedSearchRequest):
+    """Perform a grouped search across the knowledge base."""
+    try:
+        org_id = request.organization_id
+        workspace_id = request.workspace_id
+        
+        # Ensure organization is initialized
+        if org_id not in initialized_orgs:
+            raise HTTPException(status_code=404, detail=f"Organization '{org_id}' not found. Please set it up first.")
+        
+        # Initialize tools if needed
+        await tool_manager.initialize_tools_for_organization(org_id, workspace_id)
+        
+        # Get RAG tool instance
+        rag_tool = tool_manager.get_tool_instance(org_id, "rag", workspace_id)
+        if not rag_tool:
+            raise HTTPException(status_code=500, detail="RAG tool not available")
+        
+        # Execute grouped search
+        result = await rag_tool.execute_grouped_search(
+            query=request.query,
+            group_by=request.group_by,
+            limit=request.limit,
+            group_size=request.group_size,
+            filter_conditions=request.filter_conditions
+        )
+        
+        if result.success:
+            return GroupedSearchResponse(
+                success=True,
+                query=result.data["query"],
+                groups=result.data["groups"],
+                total_groups=result.data["total_groups"],
+                group_by=result.data["group_by"],
+                organization_id=org_id,
+                workspace_id=workspace_id
+            )
+        else:
+            return GroupedSearchResponse(
+                success=False,
+                query=request.query,
+                groups={},
+                total_groups=0,
+                group_by=request.group_by,
+                organization_id=org_id,
+                workspace_id=workspace_id,
+                error=result.error
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error performing grouped search: {str(e)}")
+        return GroupedSearchResponse(
+            success=False,
+            query=request.query,
+            groups={},
+            total_groups=0,
+            group_by=request.group_by,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id,
+            error=str(e)
+        )
+
+@app.post("/api/v1/rag/tenant-stats", response_model=TenantStatsResponse)
+async def get_tenant_statistics(request: TenantStatsRequest):
+    """Get statistics for a specific tenant (organization/workspace)."""
+    try:
+        org_id = request.organization_id
+        workspace_id = request.workspace_id
+        
+        # Ensure organization is initialized
+        if org_id not in initialized_orgs:
+            raise HTTPException(status_code=404, detail=f"Organization '{org_id}' not found. Please set it up first.")
+        
+        # Initialize tools if needed
+        await tool_manager.initialize_tools_for_organization(org_id, workspace_id)
+        
+        # Get RAG tool instance
+        rag_tool = tool_manager.get_tool_instance(org_id, "rag", workspace_id)
+        if not rag_tool:
+            raise HTTPException(status_code=500, detail="RAG tool not available")
+        
+        # Get tenant statistics
+        result = await rag_tool.get_tenant_statistics()
+        
+        if result.success:
+            data = result.data
+            return TenantStatsResponse(
+                success=True,
+                organization_id=data["organization_id"],
+                workspace_id=data["workspace_id"],
+                total_documents=data["total_documents"],
+                total_chunks=data["total_chunks"],
+                collection_name=data["collection_name"],
+                avg_chunks_per_document=data["avg_chunks_per_document"]
+            )
+        else:
+            return TenantStatsResponse(
+                success=False,
+                organization_id=org_id,
+                workspace_id=workspace_id or "org_default",
+                total_documents=0,
+                total_chunks=0,
+                collection_name="",
+                avg_chunks_per_document=0.0,
+                error=result.error
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting tenant statistics: {str(e)}")
+        return TenantStatsResponse(
+            success=False,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id or "org_default",
+            total_documents=0,
+            total_chunks=0,
+            collection_name="",
+            avg_chunks_per_document=0.0,
+            error=str(e)
+        )
+
+@app.post("/api/v1/rag/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_tenant_data(request: BulkDeleteRequest):
+    """Bulk delete all data for a specific tenant."""
+    try:
+        org_id = request.organization_id
+        workspace_id = request.workspace_id
+        
+        # Ensure organization is initialized
+        if org_id not in initialized_orgs:
+            raise HTTPException(status_code=404, detail=f"Organization '{org_id}' not found. Please set it up first.")
+        
+        # Initialize tools if needed
+        await tool_manager.initialize_tools_for_organization(org_id, workspace_id)
+        
+        # Get RAG tool instance
+        rag_tool = tool_manager.get_tool_instance(org_id, "rag", workspace_id)
+        if not rag_tool:
+            raise HTTPException(status_code=500, detail="RAG tool not available")
+        
+        # Execute bulk delete with confirmation
+        result = await rag_tool.bulk_delete_tenant_data(request.confirm_organization_id)
+        
+        if result.success:
+            data = result.data
+            return BulkDeleteResponse(
+                success=True,
+                organization_id=data["organization_id"],
+                workspace_id=data["workspace_id"],
+                deleted_documents=data["deleted_documents"],
+                deleted_chunks=data["deleted_chunks"],
+                collection_name=data["collection"]
+            )
+        else:
+            return BulkDeleteResponse(
+                success=False,
+                organization_id=org_id,
+                workspace_id=workspace_id or "org_default",
+                deleted_documents=0,
+                deleted_chunks=0,
+                collection_name="",
+                error=result.error
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during bulk delete: {str(e)}")
+        return BulkDeleteResponse(
+            success=False,
+            organization_id=request.organization_id,
+            workspace_id=request.workspace_id or "org_default",
+            deleted_documents=0,
+            deleted_chunks=0,
+            collection_name="",
+            error=str(e)
+        )
+
+@app.post("/api/v1/rag/migrate-data", response_model=MigrationResponse)
+async def migrate_tenant_data(request: MigrationRequest):
+    """Migrate data from one workspace to another within the same organization."""
+    try:
+        org_id = request.organization_id
+        source_workspace_id = request.source_workspace_id
+        target_workspace_id = request.target_workspace_id
+        
+        # Ensure organization is initialized
+        if org_id not in initialized_orgs:
+            raise HTTPException(status_code=404, detail=f"Organization '{org_id}' not found. Please set it up first.")
+        
+        # Initialize tools if needed
+        await tool_manager.initialize_tools_for_organization(org_id, source_workspace_id)
+        
+        # Get RAG tool instance for source workspace
+        rag_tool = tool_manager.get_tool_instance(org_id, "rag", source_workspace_id)
+        if not rag_tool:
+            raise HTTPException(status_code=500, detail="RAG tool not available")
+        
+        # Execute migration
+        result = await rag_tool.migrate_tenant_data(
+            target_workspace_id=target_workspace_id,
+            document_filter=request.document_filter
+        )
+        
+        if result.success:
+            data = result.data
+            return MigrationResponse(
+                success=True,
+                source_organization_id=data["source_organization_id"],
+                source_workspace_id=data["source_workspace_id"],
+                target_workspace_id=data["target_workspace_id"],
+                migrated_chunks=data["migrated_chunks"],
+                collection_name=data["collection"]
+            )
+        else:
+            return MigrationResponse(
+                success=False,
+                source_organization_id=org_id,
+                source_workspace_id=source_workspace_id or "org_default",
+                target_workspace_id=target_workspace_id,
+                migrated_chunks=0,
+                collection_name="",
+                error=result.error
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during migration: {str(e)}")
+        return MigrationResponse(
+            success=False,
+            source_organization_id=request.organization_id,
+            source_workspace_id=request.source_workspace_id or "org_default",
+            target_workspace_id=request.target_workspace_id,
+            migrated_chunks=0,
+            collection_name="",
+            error=str(e)
+        )
 
 if __name__ == "__main__":
     import uvicorn
