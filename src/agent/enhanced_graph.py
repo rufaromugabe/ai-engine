@@ -167,8 +167,7 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
                 args={"query": user_query},
                 reasoning="Default to RAG for information retrieval"
             )]
-        
-        # Update routing history
+          # Update routing history
         routing_history = state.get("routing_history", [])
         routing_history.append(RouterDecision(
             tool_calls=valid_tool_calls,
@@ -189,7 +188,8 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
                 "agent_config": agent_config.__dict__ if agent_config else None
             }
         }
-          except Exception as e:
+        
+    except Exception as e:
         logger.error(f"Error in intelligent_router: {str(e)}")
         return {
             "organization_id": org_id or "unknown",
