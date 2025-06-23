@@ -15,22 +15,26 @@ Organizations
 ## 🌟 Key Features
 
 ### 🏢 Organization Management
+
 - **Multi-tenant support**: Complete isolation between organizations
 - **Configurable tools**: Each organization can enable/disable specific tools
 - **Custom settings**: Organization-level configuration overrides
 
-### 🎯 Workspace Management  
+### 🎯 Workspace Management
+
 - **Isolated environments**: Each workspace operates independently
 - **Shared resources**: Common tools and settings across workspace agents
 - **Flexible configuration**: Workspace-specific overrides for tools and models
 
 ### 🤖 Agent Management
+
 - **Specialized agents**: Each agent can have unique behavior and instructions
 - **Custom personalities**: System prompts and custom instructions per agent
 - **Tool selection**: Agents can use different subsets of available tools
 - **Model configuration**: Per-agent model settings (temperature, max_tokens, etc.)
 
 ### 📚 Knowledge Base Isolation
+
 - **Workspace-specific collections**: Documents are isolated per workspace
 - **Agent context**: Each agent accesses only its workspace's knowledge
 - **Scalable storage**: Qdrant vector database with isolated collections
@@ -46,7 +50,7 @@ Create a `.env` file with your configuration:
 OPENAI_API_KEY=your_openai_api_key_here
 
 # Qdrant Configuration
-QDRANT_URL=your_qdrant_url_here  
+QDRANT_URL=your_qdrant_url_here
 QDRANT_API_KEY=your_qdrant_api_key_here
 
 # Multi-tenant Configuration
@@ -92,23 +96,23 @@ python api_usage_examples.py
 ### Organization Management
 
 #### Setup Organization
+
 ```http
 POST /api/v1/setup-organization
 Content-Type: application/json
 
 {
     "organization_id": "acme_corp",
-    "enabled_tools": ["rag"],
-    "rag_settings": {
-        "top_k": 5,
-        "similarity_threshold": 0.7
-    }
+    "enabled_tools": ["rag"]
 }
 ```
+
+**Note**: RAG, LLM, Qdrant, and Database configurations are now system-wide and managed via environment variables only. Individual organizations cannot override these settings.
 
 ### Workspace Management
 
 #### Create Workspace
+
 ```http
 POST /api/v1/workspaces
 Content-Type: application/json
@@ -125,11 +129,13 @@ Content-Type: application/json
 ```
 
 #### List Organization Workspaces
+
 ```http
 GET /api/v1/organizations/{organization_id}/workspaces
 ```
 
 #### Get Workspace Details
+
 ```http
 GET /api/v1/workspaces/{workspace_id}
 ```
@@ -137,6 +143,7 @@ GET /api/v1/workspaces/{workspace_id}
 ### Agent Management
 
 #### Create Agent
+
 ```http
 POST /api/v1/workspaces/{workspace_id}/agents
 Content-Type: application/json
@@ -155,6 +162,7 @@ Content-Type: application/json
 ```
 
 #### Update Agent
+
 ```http
 PUT /api/v1/workspaces/{workspace_id}/agents/{agent_id}
 Content-Type: application/json
@@ -168,6 +176,7 @@ Content-Type: application/json
 ```
 
 #### List Workspace Agents
+
 ```http
 GET /api/v1/workspaces/{workspace_id}/agents
 ```
@@ -175,6 +184,7 @@ GET /api/v1/workspaces/{workspace_id}/agents
 ### Enhanced Query System
 
 #### Query Specific Agent
+
 ```http
 POST /api/v1/query
 Content-Type: application/json
@@ -190,6 +200,7 @@ Content-Type: application/json
 ### Document Management
 
 #### Ingest Document to Workspace
+
 ```http
 POST /api/v1/ingest
 Content-Type: application/json
@@ -214,7 +225,7 @@ Content-Type: application/json
 # Workspace 1: General Support
 #   - Agent 1: Friendly Assistant (general inquiries)
 #   - Agent 2: Billing Specialist (payment issues)
-# Workspace 2: Technical Support  
+# Workspace 2: Technical Support
 #   - Agent 1: Bug Hunter (technical issues)
 #   - Agent 2: Integration Expert (API support)
 ```
@@ -273,7 +284,7 @@ Content-Type: application/json
 ```python
 {
     "organization_id": "org_id",
-    "name": "Workspace Name", 
+    "name": "Workspace Name",
     "description": "Workspace description",
     "shared_tools": ["rag"],
     "shared_settings": {
@@ -293,18 +304,21 @@ Content-Type: application/json
 ## 📊 Monitoring & Analytics
 
 ### Workspace Statistics
+
 ```http
 GET /api/v1/workspaces/{workspace_id}/stats
 ```
 
 Returns:
+
 - Total agents
-- Active agents  
+- Active agents
 - Tool usage
 - Document count
 - Creation/update timestamps
 
 ### Knowledge Base Information
+
 ```http
 GET /api/v1/knowledge-base/{organization_id}?workspace_id={workspace_id}
 ```
@@ -314,6 +328,7 @@ Returns workspace-specific knowledge base metrics.
 ## 🛠️ Development
 
 ### Project Structure
+
 ```
 src/
 ├── agent/
@@ -341,7 +356,7 @@ src/
 # Run unit tests
 python -m pytest tests/
 
-# Run integration tests  
+# Run integration tests
 python test_workspace_system.py
 
 # Test API endpoints
@@ -373,6 +388,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📞 Support
 
 For support and questions:
+
 - Create an issue in the repository
 - Check the API usage examples
 - Review the test files for implementation guidance

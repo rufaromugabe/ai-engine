@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from agent.tools.rag_tool import RAGTool
-from agent.config import config_manager, OrganizationConfig, ToolType, RAGConfig, LLMConfig, QdrantConfig
+from agent.config import config_manager, OrganizationConfig, ToolType, RAGConfig, LLMConfig, QdrantConfig, SystemConfig, DatabaseConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,21 +25,12 @@ def setup_test_organizations():
     """Set up test organizations for the multitenant test."""
     import os
     
-    # Get Qdrant configuration from environment
+    # Get configuration from environment
     qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
     qdrant_api_key = os.getenv("QDRANT_API_KEY")
     openai_api_key = os.getenv("OPENAI_API_KEY")
-    
-    # Create test organizations with proper configuration
-    org1_config = OrganizationConfig(
-        organization_id="org_1",
-        enabled_tools=[ToolType.RAG],
-        rag_config=RAGConfig(
-            collection_name="test_multitenant_knowledge_base",
-            vector_size=1536,
-            top_k=5,
-            similarity_threshold=0.7
-        ),
+      # Set up system-wide configuration (LLM, Qdrant, RAG, and Database)
+    system_config = SystemConfig(
         llm_config=LLMConfig(
             api_key=openai_api_key,
             model="gpt-3.5-turbo"
@@ -47,26 +38,27 @@ def setup_test_organizations():
         qdrant_config=QdrantConfig(
             url=qdrant_url,
             api_key=qdrant_api_key
-        )
+        ),
+        rag_config=RAGConfig(
+            collection_name="test_multitenant_knowledge_base",
+            vector_size=1536,
+            top_k=5,
+            similarity_threshold=0.7
+        ),
+        database_config=DatabaseConfig()
+    )
+    
+    # Update the global configuration manager with system config
+    config_manager._system_config = system_config
+      # Create test organizations with only organization-specific configuration
+    org1_config = OrganizationConfig(
+        organization_id="org_1",
+        enabled_tools=[ToolType.RAG]
     )
     
     org2_config = OrganizationConfig(
         organization_id="org_2",
-        enabled_tools=[ToolType.RAG],
-        rag_config=RAGConfig(
-            collection_name="test_multitenant_knowledge_base",
-            vector_size=1536,
-            top_k=5,
-            similarity_threshold=0.7
-        ),
-        llm_config=LLMConfig(
-            api_key=openai_api_key,
-            model="gpt-3.5-turbo"
-        ),
-        qdrant_config=QdrantConfig(
-            url=qdrant_url,
-            api_key=qdrant_api_key
-        )
+        enabled_tools=[ToolType.RAG]
     )
     
     # Register the organizations

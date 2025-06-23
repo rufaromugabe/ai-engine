@@ -69,23 +69,23 @@ class WorkspaceSpecificConfig:
     """Configuration specific to a workspace within an organization."""
     workspace_id: str
     organization_id: str
-    rag_config: Optional[RAGConfig] = None
     http_api_config: Optional[HTTPAPIConfig] = None
-    database_config: Optional[DatabaseConfig] = None
-    llm_config: Optional[LLMConfig] = None
-    qdrant_config: Optional[QdrantConfig] = None
     custom_settings: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class SystemConfig:
+    """System-wide configuration for LLM, Qdrant, RAG, and Database."""
+    llm_config: LLMConfig = field(default_factory=LLMConfig)
+    qdrant_config: QdrantConfig = field(default_factory=QdrantConfig)
+    rag_config: RAGConfig = field(default_factory=RAGConfig)
+    database_config: DatabaseConfig = field(default_factory=DatabaseConfig)
 
 @dataclass
 class OrganizationConfig:
     """Configuration for a specific organization/tenant."""
     organization_id: str
     enabled_tools: List[ToolType] = field(default_factory=list)
-    rag_config: RAGConfig = field(default_factory=RAGConfig)
     http_api_config: HTTPAPIConfig = field(default_factory=HTTPAPIConfig)
-    database_config: DatabaseConfig = field(default_factory=DatabaseConfig)
-    llm_config: LLMConfig = field(default_factory=LLMConfig)
-    qdrant_config: QdrantConfig = field(default_factory=QdrantConfig)
     custom_settings: Dict[str, Any] = field(default_factory=dict)
     workspace_configs: Dict[str, WorkspaceSpecificConfig] = field(default_factory=dict)
 
@@ -95,6 +95,7 @@ class ConfigurationManager:
     def __init__(self):
         self._organizations: Dict[str, OrganizationConfig] = {}
         self._workspace_configs: Dict[str, WorkspaceSpecificConfig] = {}  # workspace_id -> config
+        self._system_config: SystemConfig = SystemConfig()  # System-wide config for LLM and Qdrant
     
     def register_organization(self, config: OrganizationConfig) -> None:
         """Register a new organization configuration."""
@@ -122,32 +123,26 @@ class ConfigurationManager:
         """Get effective configuration, prioritizing workspace-specific settings."""
         org_config = self.get_organization_config(organization_id)
         
+        # For LLM, Qdrant, RAG, and Database, always return system-wide config
+        if config_type == "llm":
+            return self._system_config.llm_config
+        elif config_type == "qdrant":
+            return self._system_config.qdrant_config
+        elif config_type == "rag":
+            return self._system_config.rag_config
+        elif config_type == "database":
+            return self._system_config.database_config
+        
         if workspace_id and workspace_id in self._workspace_configs:
             workspace_config = self._workspace_configs[workspace_id]
             
             # Return workspace-specific config if available, otherwise fall back to org config
-            if config_type == "rag":
-                return workspace_config.rag_config or org_config.rag_config
-            elif config_type == "llm":
-                return workspace_config.llm_config or org_config.llm_config
-            elif config_type == "qdrant":
-                return workspace_config.qdrant_config or org_config.qdrant_config
-            elif config_type == "http_api":
+            if config_type == "http_api":
                 return workspace_config.http_api_config or org_config.http_api_config
-            elif config_type == "database":
-                return workspace_config.database_config or org_config.database_config
         
         # Fallback to organization config
-        if config_type == "rag":
-            return org_config.rag_config
-        elif config_type == "llm":
-            return org_config.llm_config
-        elif config_type == "qdrant":
-            return org_config.qdrant_config
-        elif config_type == "http_api":
+        if config_type == "http_api":
             return org_config.http_api_config
-        elif config_type == "database":
-            return org_config.database_config
     
     def update_organization_config(self, organization_id: str, updates: Dict[str, Any]) -> None:
         """Update organization configuration."""
@@ -167,22 +162,35 @@ class ConfigurationManager:
             return True
         return False
     
-    def is_tool_enabled(self, organization_id: str, tool: ToolType) -> bool:
-        """Check if a tool is enabled for an organization."""
+    def is_tool_enabled(self, organization_id: str, tool: ToolType) -> bool:        """Check if a tool is enabled for an organization."""
         config = self.get_organization_config(organization_id)
         return tool in config.enabled_tools
     
-    def get_rag_config(self, organization_id: str, workspace_id: Optional[str] = None) -> RAGConfig:
-        """Get RAG configuration for an organization/workspace."""
-        return self.get_effective_config(organization_id, workspace_id, "rag")
+    def get_rag_config(self, organization_id: Optional[str] = None, workspace_id: Optional[str] = None) -> RAGConfig:
+        """Get system-wide RAG configuration."""
+        return self._system_config.rag_config
     
-    def get_llm_config(self, organization_id: str, workspace_id: Optional[str] = None) -> LLMConfig:
-        """Get LLM configuration for an organization/workspace."""
-        return self.get_effective_config(organization_id, workspace_id, "llm")
+    def get_llm_config(self, organization_id: Optional[str] = None, workspace_id: Optional[str] = None) -> LLMConfig:
+        """Get system-wide LLM configuration."""
+        return self._system_config.llm_config
     
-    def get_qdrant_config(self, organization_id: str, workspace_id: Optional[str] = None) -> QdrantConfig:
-        """Get Qdrant configuration for an organization/workspace."""
-        return self.get_effective_config(organization_id, workspace_id, "qdrant")
+    def get_qdrant_config(self, organization_id: Optional[str] = None, workspace_id: Optional[str] = None) -> QdrantConfig:
+        """Get system-wide Qdrant configuration."""
+        return self._system_config.qdrant_config
+    
+    def get_database_config(self, organization_id: Optional[str] = None, workspace_id: Optional[str] = None) -> DatabaseConfig:
+        """Get system-wide Database configuration."""
+        return self._system_config.database_config
+    
+    def get_system_config(self) -> SystemConfig:
+        """Get the system-wide configuration."""
+        return self._system_config
+    
+    def update_system_config(self, updates: Dict[str, Any]) -> None:
+        """Update system-wide configuration."""
+        for key, value in updates.items():
+            if hasattr(self._system_config, key):
+                setattr(self._system_config, key, value)
 
 # Global configuration manager instance
 config_manager = ConfigurationManager()

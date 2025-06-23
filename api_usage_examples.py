@@ -56,11 +56,8 @@ def example_setup_organization():
     
     payload = {
         "organization_id": "acme_corp",
-        "enabled_tools": ["rag"],
-        "rag_settings": {
-            "top_k": 5,
-            "similarity_threshold": 0.7
-        }
+        "enabled_tools": ["rag"]
+        # Note: RAG settings are now configured system-wide via environment variables
     }
     
     response = requests.post(f"{BASE_URL}/setup-organization", json=payload)

@@ -91,7 +91,6 @@ class UpdateAgentRequest(BaseModel):
 class OrganizationSetupRequest(BaseModel):
     organization_id: str
     enabled_tools: List[str] = ["rag"]
-    rag_settings: Optional[Dict[str, Any]] = None
 
 class KnowledgeBaseInfo(BaseModel):
     success: bool
@@ -200,19 +199,11 @@ async def setup_organization(request: OrganizationSetupRequest):
             try:
                 enabled_tools.append(ToolType(tool_name))
             except ValueError:
-                logger.warning(f"Unknown tool type: {tool_name}")
-        
-        # Create organization configuration
+                logger.warning(f"Unknown tool type: {tool_name}")        # Create organization configuration
         org_config = OrganizationConfig(
             organization_id=org_id,
             enabled_tools=enabled_tools
         )
-        
-        # Apply RAG settings if provided
-        if request.rag_settings:
-            for key, value in request.rag_settings.items():
-                if hasattr(org_config.rag_config, key):
-                    setattr(org_config.rag_config, key, value)
         
         # Register and initialize
         config_manager.register_organization(org_config)

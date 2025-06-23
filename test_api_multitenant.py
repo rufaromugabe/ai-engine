@@ -29,11 +29,8 @@ def test_organization_setup():
     """Test organization setup"""
     payload = {
         "organization_id": "test_org_multitenant",
-        "enabled_tools": ["rag"],
-        "rag_settings": {
-            "top_k": 5,
-            "similarity_threshold": 0.7
-        }
+        "enabled_tools": ["rag"]
+        # Note: RAG settings are now system-wide via environment variables
     }
     
     try:
