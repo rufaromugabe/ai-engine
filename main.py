@@ -873,6 +873,8 @@ async def list_tools(organization_id: str, workspace_id: str = None, data_provid
     # Ensure org/workspace exist (for dummy mode, this will create them if needed)
     data_provider.get_organizations()
     data_provider.get_workspaces(organization_id)
+    # Always initialize tools before returning
+    await tool_manager.initialize_tools_for_organization(organization_id, workspace_id)
     tools = tool_manager.get_available_tools(organization_id, workspace_id)
     schemas = tool_manager.get_tool_schemas(organization_id, workspace_id)
     return {
