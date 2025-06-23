@@ -1,7 +1,7 @@
 """Tool manager for dynamic tool loading and management."""
 
 import logging
-from typing import Dict, List, Optional, Any, Type
+from typing import Dict, List, Optional, Any, Type, Tuple
 from dataclasses import dataclass
 
 from .tools.base_tool import BaseTool, ToolResult
@@ -20,12 +20,13 @@ class ToolExecutionResult:
     organization_id: str
 
 class ToolManager:
-    """Manages tools for the AI agent system."""
+    """Manages tools for the AI agent system. Supports dynamic registration and unregistration."""
     
     def __init__(self):
         self._tool_registry: Dict[ToolType, Type[BaseTool]] = {}
         self._active_tools: Dict[str, Dict[str, BaseTool]] = {}  # {org_id_workspace_id: {tool_name: tool_instance}}
         self._organization_tools: Dict[str, Dict[str, BaseTool]] = {}  # {org_id: {tool_name: tool_instance}}
+        self._tool_schema_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}  # (org_id, ws_id) -> schemas
         self._register_default_tools()
     
     def _get_tool_key(self, organization_id: str, workspace_id: Optional[str] = None) -> str:
@@ -34,10 +35,33 @@ class ToolManager:
             return f"{organization_id}_{workspace_id}"
         return organization_id
     
+    def _get_cache_key(self, organization_id: str, workspace_id: Optional[str]) -> Tuple[str, str]:
+        return (organization_id, workspace_id or "__none__")
+    
     def _register_default_tools(self) -> None:
         """Register default tools."""
         self._tool_registry[ToolType.RAG] = RAGTool
+        
         # Additional tools will be registered here as they are implemented
+    
+    def register_tool(self, tool_type: ToolType, tool_class: Type[BaseTool]) -> None:
+        """Dynamically register a new tool type."""
+        self._tool_registry[tool_type] = tool_class
+        self._tool_schema_cache.clear()
+        logger.info(f"Registered tool type: {tool_type.value}")
+    
+    def unregister_tool(self, tool_type: ToolType) -> None:
+        """Dynamically unregister a tool type."""
+        if tool_type in self._tool_registry:
+            del self._tool_registry[tool_type]
+            self._tool_schema_cache.clear()
+            logger.info(f"Unregistered tool type: {tool_type.value}")
+    
+    def reload_tools(self) -> None:
+        """Reload tools from config or API (stub for future extension)."""
+        self._register_default_tools()
+        self._tool_schema_cache.clear()
+        # In the future, load additional tools from config or external API
     
     async def initialize_tools_for_organization(
         self, 
@@ -90,6 +114,7 @@ class ToolManager:
                     logger.warning(f"Tool type {tool_type} not found in registry")
                     initialization_results.append(False)
             
+            self._tool_schema_cache.pop(self._get_cache_key(organization_id, workspace_id), None)
             return all(initialization_results)
             
         except Exception as e:
@@ -183,7 +208,10 @@ class ToolManager:
         return []
     
     def get_tool_schemas(self, organization_id: str, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get schemas for all available tools for an organization/workspace."""
+        """Get schemas for all available tools for an organization/workspace, with caching."""
+        cache_key = self._get_cache_key(organization_id, workspace_id)
+        if cache_key in self._tool_schema_cache:
+            return self._tool_schema_cache[cache_key]
         tool_key = self._get_tool_key(organization_id, workspace_id)
         schemas = []
         
@@ -195,6 +223,7 @@ class ToolManager:
             for tool in self._organization_tools[organization_id].values():
                 schemas.append(tool.get_schema())
         
+        self._tool_schema_cache[cache_key] = schemas
         return schemas
     
     def is_tool_available(self, organization_id: str, tool_name: str, workspace_id: Optional[str] = None) -> bool:
@@ -231,11 +260,6 @@ class ToolManager:
         """Reload tools for an organization/workspace (useful when configuration changes)."""
         await self.cleanup_organization_tools(organization_id, workspace_id)
         return await self.initialize_tools_for_organization(organization_id, workspace_id)
-    
-    def register_tool(self, tool_type: ToolType, tool_class: Type[BaseTool]) -> None:
-        """Register a new tool type."""
-        self._tool_registry[tool_type] = tool_class
-        logger.info(f"Registered tool type: {tool_type.value}")
     
     def get_tool_instance(self, organization_id: str, tool_name: str, workspace_id: Optional[str] = None) -> Optional[BaseTool]:
         """Get a specific tool instance for an organization/workspace."""

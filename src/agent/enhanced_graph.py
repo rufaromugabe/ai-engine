@@ -78,6 +78,10 @@ class WorkspaceAgentConfiguration:
     agent_id: Optional[str] = None
     custom_instructions: str = ""
     
+# Limit the number of stored reflections and routing history to the last 3 for performance
+MAX_REFLECTIONS = 3
+MAX_ROUTING_HISTORY = 3
+
 async def intelligent_router(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """LLM-based intelligent router that decides which tools to use."""
     # Initialize variables to prevent UnboundLocalError
@@ -224,7 +228,7 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
             confidence=router_result.confidence
         ))
         
-        return {
+        result = {
             "organization_id": org_id,
             "workspace_id": workspace_id,
             "agent_id": agent_id,
@@ -237,6 +241,12 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
                 "agent_config": agent_config.__dict__ if agent_config else None
             }
         }
+        # Limit history for performance
+        if "reflection_history" in state:
+            state["reflection_history"] = state["reflection_history"][-MAX_REFLECTIONS:]
+        if "routing_history" in result:
+            result["routing_history"] = result["routing_history"][-MAX_ROUTING_HISTORY:]
+        return result
         
     except Exception as e:
         logger.error(f"Error in intelligent_router: {str(e)}")
@@ -318,10 +328,16 @@ async def execute_tools(state: AgentState, config: RunnableConfig) -> Dict[str, 
                     "reasoning": tool_call.reasoning
                 })
         
-        return {
+        result = {
             "messages": messages,
             "tool_results": tool_results
         }
+        # Limit history for performance
+        if "reflection_history" in state:
+            state["reflection_history"] = state["reflection_history"][-MAX_REFLECTIONS:]
+        if "routing_history" in state:
+            state["routing_history"] = state["routing_history"][-MAX_ROUTING_HISTORY:]
+        return result
         
     except Exception as e:
         logger.error(f"Error executing tools: {str(e)}")
@@ -398,9 +414,15 @@ Max iterations allowed: 3 (current: {iteration_count + 1})"""
         reflection_history = state.get("reflection_history", [])
         reflection_history.append(reflection_result)
         
+        # Limit history for performance
+        if "reflection_history" in state:
+            state["reflection_history"] = state["reflection_history"][-MAX_REFLECTIONS:]
+        if "routing_history" in state:
+            state["routing_history"] = state["routing_history"][-MAX_ROUTING_HISTORY:]
         return {
             "reflection_history": reflection_history,
-            "iteration_count": iteration_count + 1
+            "should_retry": reflection_result.should_retry,
+            "quality_score": reflection_result.quality_score
         }
         
     except Exception as e:
@@ -413,7 +435,8 @@ Max iterations allowed: 3 (current: {iteration_count + 1})"""
                     should_retry=False,
                     feedback=f"Reflection error: {str(e)}"
                 )            ],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "should_retry": False,
+            "quality_score": 0.5
         }
 
 async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
@@ -520,9 +543,15 @@ Use this reflection to improve your response quality.
         # Generate response
         response = await llm.ainvoke(messages_for_llm)
         
-        return {
+        result = {
             "messages": [response]
         }
+        # Limit history for performance
+        if "reflection_history" in state:
+            state["reflection_history"] = state["reflection_history"][-MAX_REFLECTIONS:]
+        if "routing_history" in state:
+            state["routing_history"] = state["routing_history"][-MAX_ROUTING_HISTORY:]
+        return result
         
     except Exception as e:
         logger.error(f"Error generating response: {str(e)}")

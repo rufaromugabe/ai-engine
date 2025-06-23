@@ -1,6 +1,6 @@
 """FastAPI server for the RAG-enabled AI agent system."""
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Body
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, List
 import asyncio
@@ -16,6 +16,7 @@ from agent.config import config_manager, OrganizationConfig, ToolType, Workspace
 from agent.tool_manager import tool_manager
 from agent.workspace_manager import workspace_manager, AgentConfig, WorkspaceConfig
 from langchain_core.messages import HumanMessage
+from agent.data_api import get_data_provider, DummyDataProvider
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -161,6 +162,15 @@ class MigrationResponse(BaseModel):
     migrated_chunks: int
     collection_name: str
     error: Optional[str] = None
+
+class ToolConfigRequest(BaseModel):
+    organization_id: str
+    workspace_id: str = None
+    tool_name: str
+
+class AgentConfigUpdateRequest(BaseModel):
+    workspace_id: str
+    updates: dict
 
 # Global state to track initialized organizations
 initialized_orgs = set()
@@ -336,12 +346,12 @@ async def health_check():
     """Simple health check endpoint."""
     return {"status": "healthy", "service": "multitenant-rag-api"}
 
-@app.get("/api/v1/organizations")
-async def list_organizations():
-    """List all initialized organizations."""
+@app.get("/api/v1/organizations", response_model=Dict[str, Any])
+async def list_organizations(data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """List all organizations (dummy or real based on DUMMY_MODE)."""
     return {
-        "organizations": list(initialized_orgs),
-        "total": len(initialized_orgs)
+        "organizations": data_provider.get_organizations(),
+        "total": len(data_provider.get_organizations())
     }
 
 # Add CORS middleware for development
@@ -395,65 +405,28 @@ async def create_workspace(request: CreateWorkspaceRequest):
             error=str(e)
         )
 
-@app.get("/api/v1/organizations/{organization_id}/workspaces")
-async def list_organization_workspaces(organization_id: str):
-    """List all workspaces for an organization."""
-    try:
-        workspaces = workspace_manager.list_organization_workspaces(organization_id)
-        return {
-            "success": True,
-            "workspaces": [
-                {
-                    "workspace_id": ws.workspace_id,
-                    "name": ws.name,
-                    "description": ws.description,
-                    "status": ws.status.value,
-                    "agent_count": len(ws.agents),
-                    "created_at": ws.created_at.isoformat()
-                }
-                for ws in workspaces
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Error listing workspaces: {str(e)}")
-        return {"success": False, "error": str(e)}
+@app.get("/api/v1/organizations/{organization_id}/workspaces", response_model=Dict[str, Any])
+async def list_organization_workspaces(organization_id: str, data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """List all workspaces for an organization (dummy or real based on DUMMY_MODE)."""
+    workspaces = data_provider.get_workspaces(organization_id)
+    return {
+        "success": True,
+        "workspaces": workspaces
+    }
 
-@app.get("/api/v1/workspaces/{workspace_id}")
-async def get_workspace(workspace_id: str):
-    """Get workspace details."""
-    try:
-        workspace = workspace_manager.get_workspace(workspace_id)
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
-        
-        return {
-            "success": True,
-            "workspace": {
-                "workspace_id": workspace.workspace_id,
-                "organization_id": workspace.organization_id,
-                "name": workspace.name,
-                "description": workspace.description,
-                "status": workspace.status.value,
-                "shared_tools": [tool.value for tool in workspace.shared_tools],
-                "agents": [
-                    {
-                        "agent_id": agent.agent_id,
-                        "name": agent.name,
-                        "description": agent.description,
-                        "is_active": agent.is_active,
-                        "enabled_tools": [tool.value for tool in agent.enabled_tools]
-                    }
-                    for agent in workspace.agents.values()
-                ],
-                "created_at": workspace.created_at.isoformat(),
-                "updated_at": workspace.updated_at.isoformat()
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting workspace: {str(e)}")
-        return {"success": False, "error": str(e)}
+@app.get("/api/v1/workspaces/{workspace_id}", response_model=Dict[str, Any])
+async def get_workspace(workspace_id: str, data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """Get workspace details (dummy or real based on DUMMY_MODE)."""
+    # Find the workspace in all orgs
+    for org in data_provider.get_organizations():
+        workspaces = data_provider.get_workspaces(org["organization_id"])
+        for ws in workspaces:
+            if ws["workspace_id"] == workspace_id:
+                agents = data_provider.get_agents(workspace_id)
+                ws_detail = dict(ws)
+                ws_detail["agents"] = agents
+                return {"success": True, "workspace": ws_detail}
+    return {"success": False, "error": "Workspace not found"}
 
 @app.delete("/api/v1/workspaces/{workspace_id}")
 async def delete_workspace(workspace_id: str):
@@ -516,59 +489,23 @@ async def create_agent(workspace_id: str, request: CreateAgentRequest):
             error=str(e)
         )
 
-@app.get("/api/v1/workspaces/{workspace_id}/agents")
-async def list_workspace_agents(workspace_id: str):
-    """List all agents in a workspace."""
-    try:
-        agents = workspace_manager.list_agents_in_workspace(workspace_id)
-        return {
-            "success": True,
-            "agents": [
-                {
-                    "agent_id": agent.agent_id,
-                    "name": agent.name,
-                    "description": agent.description,
-                    "is_active": agent.is_active,
-                    "enabled_tools": [tool.value for tool in agent.enabled_tools],
-                    "created_at": agent.created_at.isoformat(),
-                    "updated_at": agent.updated_at.isoformat()
-                }
-                for agent in agents
-            ]
-        }
-    except Exception as e:
-        logger.error(f"Error listing agents: {str(e)}")
-        return {"success": False, "error": str(e)}
+@app.get("/api/v1/workspaces/{workspace_id}/agents", response_model=Dict[str, Any])
+async def list_workspace_agents(workspace_id: str, data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """List all agents in a workspace (dummy or real based on DUMMY_MODE)."""
+    agents = data_provider.get_agents(workspace_id)
+    return {
+        "success": True,
+        "agents": agents
+    }
 
-@app.get("/api/v1/workspaces/{workspace_id}/agents/{agent_id}")
-async def get_agent(workspace_id: str, agent_id: str):
-    """Get agent details."""
-    try:
-        agent = workspace_manager.get_agent(workspace_id, agent_id)
-        if not agent:
-            raise HTTPException(status_code=404, detail="Agent not found")
-        
-        return {
-            "success": True,
-            "agent": {
-                "agent_id": agent.agent_id,
-                "name": agent.name,
-                "description": agent.description,
-                "enabled_tools": [tool.value for tool in agent.enabled_tools],
-                "custom_instructions": agent.custom_instructions,
-                "system_prompt": agent.system_prompt,
-                "model_settings": agent.model_settings,
-                "tool_configurations": agent.tool_configurations,
-                "is_active": agent.is_active,
-                "created_at": agent.created_at.isoformat(),
-                "updated_at": agent.updated_at.isoformat()
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting agent: {str(e)}")
-        return {"success": False, "error": str(e)}
+@app.get("/api/v1/workspaces/{workspace_id}/agents/{agent_id}", response_model=Dict[str, Any])
+async def get_agent(workspace_id: str, agent_id: str, data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """Get agent details (dummy or real based on DUMMY_MODE)."""
+    agents = data_provider.get_agents(workspace_id)
+    for agent in agents:
+        if agent["agent_id"] == agent_id:
+            return {"success": True, "agent": agent}
+    return {"success": False, "error": "Agent not found"}
 
 @app.put("/api/v1/workspaces/{workspace_id}/agents/{agent_id}")
 async def update_agent(workspace_id: str, agent_id: str, request: UpdateAgentRequest):
@@ -891,6 +828,93 @@ async def migrate_tenant_data(request: MigrationRequest):
             collection_name="",
             error=str(e)
         )
+
+@app.get("/api/v1/data")
+async def get_all_data(data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """Return all organizations, workspaces, agents, and actual RAG knowledge base info. Shows dummy or real data based on env."""
+    import os
+    dummy_mode = os.getenv("DUMMY_MODE", "true").lower() == "true"
+    orgs = data_provider.get_organizations()
+    result = []
+    for org in orgs:
+        org_id = org["organization_id"]
+        workspaces = data_provider.get_workspaces(org_id)
+        ws_list = []
+        for ws in workspaces:
+            ws_id = ws["workspace_id"]
+            agents = data_provider.get_agents(ws_id)
+            kb_info = await data_provider.get_knowledge_base_info(org_id, ws_id)
+            ws_list.append({
+                **ws,
+                "agents": agents,
+                "knowledge_base_info": kb_info
+            })
+        result.append({
+            **org,
+            "workspaces": ws_list
+        })
+    return {
+        "mode": "dummy" if dummy_mode else "real",
+        "dummy_mode": dummy_mode,
+        "organizations": result
+    }
+
+@app.get("/api/v1/tools")
+async def list_tools(organization_id: str, workspace_id: str = None, data_provider: DummyDataProvider = Depends(get_data_provider)):
+    """List all available tools and their schemas for a given organization and workspace."""
+    # Ensure org/workspace exist (for dummy mode, this will create them if needed)
+    data_provider.get_organizations()
+    data_provider.get_workspaces(organization_id)
+    tools = tool_manager.get_available_tools(organization_id, workspace_id)
+    schemas = tool_manager.get_tool_schemas(organization_id, workspace_id)
+    return {
+        "organization_id": organization_id,
+        "workspace_id": workspace_id,
+        "tools": tools,
+        "schemas": schemas
+    }
+
+@app.post("/api/v1/tools/enable")
+async def enable_tool(request: ToolConfigRequest):
+    """Enable a tool for an org/workspace."""
+    org_id = request.organization_id
+    ws_id = request.workspace_id
+    tool_type = ToolType(request.tool_name)
+    config = config_manager.get_organization_config(org_id)
+    if tool_type not in config.enabled_tools:
+        config.enabled_tools.append(tool_type)
+    await tool_manager.initialize_tools_for_organization(org_id, ws_id, tools=[tool_type])
+    return {"success": True, "message": f"Tool {tool_type.value} enabled for {org_id} {ws_id}"}
+
+@app.post("/api/v1/tools/disable")
+async def disable_tool(request: ToolConfigRequest):
+    """Disable a tool for an org/workspace."""
+    org_id = request.organization_id
+    ws_id = request.workspace_id
+    tool_type = ToolType(request.tool_name)
+    config = config_manager.get_organization_config(org_id)
+    if tool_type in config.enabled_tools:
+        config.enabled_tools.remove(tool_type)
+    # Optionally remove from active tools
+    tool_key = tool_manager._get_tool_key(org_id, ws_id)
+    if tool_key in tool_manager._active_tools and tool_type.value in tool_manager._active_tools[tool_key]:
+        del tool_manager._active_tools[tool_key][tool_type.value]
+    tool_manager._tool_schema_cache.pop(tool_manager._get_cache_key(org_id, ws_id), None)
+    return {"success": True, "message": f"Tool {tool_type.value} disabled for {org_id} {ws_id}"}
+
+@app.post("/api/v1/tools/reload")
+async def reload_tools():
+    """Reload the tool registry from config or API."""
+    tool_manager.reload_tools()
+    return {"success": True, "message": "Tool registry reloaded."}
+
+@app.put("/api/v1/agents/{agent_id}/config")
+async def update_agent_config(agent_id: str, request: AgentConfigUpdateRequest):
+    """Update agent config at runtime."""
+    ws_id = request.workspace_id
+    updates = request.updates
+    success = workspace_manager.update_agent(ws_id, agent_id, updates)
+    return {"success": success, "message": "Agent config updated." if success else "Failed to update agent config."}
 
 if __name__ == "__main__":
     import uvicorn

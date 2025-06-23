@@ -143,7 +143,7 @@ class ConfigurationManager:
         # Fallback to organization config
         if config_type == "http_api":
             return org_config.http_api_config
-    
+
     def update_organization_config(self, organization_id: str, updates: Dict[str, Any]) -> None:
         """Update organization configuration."""
         if organization_id in self._organizations:
@@ -162,7 +162,8 @@ class ConfigurationManager:
             return True
         return False
     
-    def is_tool_enabled(self, organization_id: str, tool: ToolType) -> bool:        """Check if a tool is enabled for an organization."""
+    def is_tool_enabled(self, organization_id: str, tool: ToolType) -> bool:      
+        """Check if a tool is enabled for an organization."""
         config = self.get_organization_config(organization_id)
         return tool in config.enabled_tools
     
