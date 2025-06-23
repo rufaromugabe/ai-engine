@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from .tools.base_tool import BaseTool, ToolResult
 from .tools.rag_tool import RAGTool
 from .config import config_manager, ToolType
+from .tools.calculator_tool import CalculatorTool
+from .tools.search_tool import SearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,8 @@ class ToolManager:
     def _register_default_tools(self) -> None:
         """Register default tools."""
         self._tool_registry[ToolType.RAG] = RAGTool
+        self._tool_registry[ToolType.CALCULATOR] = CalculatorTool
+        self._tool_registry[ToolType.SEARCH] = SearchTool
         
         # Additional tools will be registered here as they are implemented
     

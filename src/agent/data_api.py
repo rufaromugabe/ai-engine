@@ -11,27 +11,30 @@ class DummyDataProvider:
             "organization_id": "dev-org",
             "name": "Development Org",
             "description": "A dummy organization for development/testing.",
-            "enabled_tools": ["rag"]
+            "enabled_tools": ["rag", "calculator", "search"]
         },
         {
             "organization_id": "test-org",
             "name": "Test Org",
             "description": "A dummy organization for testing purposes.",
-            "enabled_tools": ["rag"]
+            "enabled_tools": ["rag", "calculator", "search"]
         }
     ]
 
     def get_organizations(self) -> List[Dict[str, Any]]:
-        """Return dummy organizations and ensure they exist in config_manager for Qdrant compatibility."""
+        """Return dummy organizations and ensure they exist in config_manager for Qdrant compatibility. Always update enabled_tools to include all dummy tools."""
+        all_dummy_tools = [ToolType.RAG, ToolType.CALCULATOR, ToolType.SEARCH]
         for org in self.DUMMY_ORGANIZATIONS:
             org_id = org["organization_id"]
             # Ensure org exists in config_manager
             try:
-                config_manager.get_organization_config(org_id)
+                config = config_manager.get_organization_config(org_id)
+                # Always update enabled_tools to include all dummy tools
+                config.enabled_tools = all_dummy_tools.copy()
             except Exception:
                 config_manager.register_organization(OrganizationConfig(
                     organization_id=org_id,
-                    enabled_tools=[ToolType.RAG]
+                    enabled_tools=all_dummy_tools.copy()
                 ))
         return self.DUMMY_ORGANIZATIONS
 
@@ -94,7 +97,7 @@ class DummyDataProvider:
                 "agent_id": "dev-agent",
                 "name": "Development Agent",
                 "description": "A dummy agent for dev.",
-                "enabled_tools": ["rag"],
+                "enabled_tools": ["rag", "calculator", "search"],
                 "is_active": True,
                 "created_at": "2024-01-01T00:00:00",
                 "updated_at": "2024-01-01T00:00:00"

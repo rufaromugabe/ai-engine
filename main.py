@@ -180,12 +180,20 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     logger.info("Starting Multi-Workspace AI Agent API")
-    
+
+    # Initialize dummy data provider and auto-initialize dummy orgs/tools
+    dummy_provider = DummyDataProvider()
+    for org in dummy_provider.DUMMY_ORGANIZATIONS:
+        org_id = org["organization_id"]
+        # Register org if needed (already done in get_organizations)
+        # Initialize tools and add to initialized_orgs
+        await tool_manager.initialize_tools_for_organization(org_id)
+        initialized_orgs.add(org_id)
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Multi-Workspace AI Agent API")
-    
     # Cleanup all organization tools
     for org_id in initialized_orgs:
         await tool_manager.cleanup_organization_tools(org_id)
