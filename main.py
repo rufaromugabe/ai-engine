@@ -250,7 +250,8 @@ async def query_agent(request: QueryRequest):
             response=result.get("response", ""),
             organization_id=result["organization_id"],
             workspace_id=result.get("workspace_id"),
-            agent_id=result.get("agent_id"),            tool_results=result.get("tool_results", []),
+            agent_id=result.get("agent_id"),
+            tool_results=result.get("tool_results", []),
             error=result.get("error")
         )
         
