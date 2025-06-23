@@ -145,9 +145,8 @@ async def intelligent_router(state: AgentState, config: RunnableConfig) -> Dict[
         
         if state.get("routing_history"):
             routing_context += f"\n\nPrevious routing attempts: {len(state['routing_history'])}"
-        
-        # Create system prompt for intelligent routing
-        system_prompt = f"""You are an intelligent tool router for an AI assistant. Analyze the user's query and decide which tools to use.
+          # Create system prompt for intelligent routing
+        system_prompt = f"""You are an intelligent tool router for an AI assistant. Analyze the user's query and decide whether tools are needed and which ones to use.
 
 Available tools and their capabilities:
 {json.dumps(tool_schemas, indent=2)}
@@ -158,25 +157,31 @@ Current iteration: {state.get('iteration_count', 0)}
 {routing_context}
 
 Instructions:
-1. Analyze the user's intent and information needs
-2. Select the most appropriate tool(s) to fulfill the request
-3. Consider the previous feedback if this is a retry
-4. Provide clear reasoning for your tool selection
-5. Set confidence based on how well the tools match the query
+1. First, determine if the query requires any tools at all
+2. For simple greetings, conversational responses, or basic questions that don't need external data, return an empty tool_calls list
+3. Only use tools when the query specifically requires information retrieval, analysis, or external processing
+4. If tools are needed, select the most appropriate tool(s) to fulfill the request
+5. Consider the previous feedback if this is a retry
+6. Provide clear reasoning for your tool selection (or lack thereof)
+7. Set confidence based on how well your decision matches the query intent
 
-For typical queries:
-- Knowledge/information requests → RAG tool
-- Multiple related questions → Sequential tool calls
-- Complex analysis → Consider multiple tools
+Tool usage guidelines:
+- Simple greetings ("hi", "hello", "how are you") → NO TOOLS (empty tool_calls list)
+- Basic conversational questions → NO TOOLS (empty tool_calls list)
+- General questions that can be answered with common knowledge → NO TOOLS (empty tool_calls list)
+- Knowledge/information requests about specific topics → RAG tool
+- Document search or retrieval needs → RAG tool
+- Multiple related information questions → Sequential tool calls
+- Complex analysis requiring external data → Consider multiple tools
 
+IMPORTANT: Return empty tool_calls list for conversational queries that don't need external information.
 Be strategic: if previous attempts failed, try a different approach or tool combination."""
 
         # Get routing decision from LLM
         router_result = await structured_llm.ainvoke([
             SystemMessage(content=system_prompt)
         ])
-        
-        # Filter tool calls to only include available tools
+          # Filter tool calls to only include available tools
         valid_tool_calls = []
         for tool_call in router_result.tool_calls:
             if tool_call.name in available_tools:
@@ -184,13 +189,33 @@ Be strategic: if previous attempts failed, try a different approach or tool comb
             else:
                 logger.warning(f"Router selected unavailable tool: {tool_call.name}")
         
-        # If no valid tools, default to available ones
-        if not valid_tool_calls and "rag" in available_tools:
-            valid_tool_calls = [ToolCall(
-                name="rag",
-                args={"query": user_query},
-                reasoning="Default to RAG for information retrieval"
-            )]
+        # Only apply default RAG if the query seems to require information retrieval
+        # and no valid tools were selected (but the router confidence is low)
+        if not valid_tool_calls and router_result.confidence < 0.3:
+            # Check if this might be an information-seeking query by looking for keywords
+            info_keywords = [
+                "what", "how", "when", "where", "why", "who", "tell me", "explain", 
+                "describe", "define", "information", "details", "about", "help with",
+                "find", "search", "lookup", "know", "learn"
+            ]
+            query_lower = user_query.lower()
+            
+            # If the query contains information-seeking keywords, default to RAG
+            if any(keyword in query_lower for keyword in info_keywords) and "rag" in available_tools:
+                valid_tool_calls = [ToolCall(
+                    name="rag",
+                    args={"query": user_query},
+                    reasoning="Query appears to seek information but router confidence was low - defaulting to RAG"
+                )]
+                logger.info(f"Applied RAG fallback for information-seeking query: {user_query}")
+        
+        # Log the routing decision for debugging
+        logger.info(f"Router decision for '{user_query}': {len(valid_tool_calls)} tools selected, confidence: {router_result.confidence}")
+        if valid_tool_calls:
+            tool_names = [tc.name for tc in valid_tool_calls]
+            logger.info(f"Selected tools: {tool_names}")
+        else:
+            logger.info("No tools selected - will generate direct response")
           # Update routing history
         routing_history = state.get("routing_history", [])
         routing_history.append(RouterDecision(
@@ -436,8 +461,7 @@ async def generate_response(state: AgentState, config: RunnableConfig) -> Dict[s
             
             # Add custom instructions
             if agent_config.custom_instructions:
-                system_prompt += f"\n\nCustom Instructions: {agent_config.custom_instructions}"
-        
+                system_prompt += f"\n\nCustom Instructions: {agent_config.custom_instructions}"        
         # Add context from tool execution and reflection
         tool_results = state.get("tool_results", [])
         reflection_history = state.get("reflection_history", [])
@@ -453,13 +477,19 @@ Current Context:
 - Available tools: {tool_manager.get_available_tools(org_id, workspace_id)}
 
 When responding:
-1. Synthesize information from all tool results
-2. Be transparent about the quality and limitations of available information
-3. If multiple attempts were made, acknowledge the iteration process
-4. Provide helpful, accurate, and contextual responses
-5. Cite sources when appropriate
+1. If no tools were used, provide a natural conversational response using your built-in knowledge
+2. For simple greetings and casual conversation, respond warmly and naturally without tool information
+3. If tools were used, synthesize information from all tool results
+4. Be transparent about the quality and limitations of available information when tools were used
+5. If multiple attempts were made, acknowledge the iteration process
+6. Provide helpful, accurate, and contextual responses
+7. Cite sources when appropriate and tools were used
 
-Quality Guidelines:
+Response Guidelines:
+- Simple greetings ("hi", "hello") → Provide a friendly, natural greeting
+- Casual conversation → Respond conversationally without mentioning tools
+- Information queries with tool results → Synthesize and cite tool information
+- Information queries without tool results → Use general knowledge and explain limitations
 - If tool results are limited, explain why and suggest alternatives
 - If this is a retry iteration, build upon previous attempts
 - Be honest about gaps in knowledge or failed tool executions
